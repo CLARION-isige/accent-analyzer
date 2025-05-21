@@ -1,0 +1,7 @@
+yt-dlp==2025.4.30
+SpeechRecognition==3.14.3
+streamlit==1.45.1
+mistralai==1.7.0
+python-dotenv==1.0.0
+ffmpeg-python==0.2.0
+torch==2.7.0
