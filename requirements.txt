@@ -1,5 +1,6 @@
-yt-dlp==2023.11.16
-SpeechRecognition==3.10.0
+yt-dlp==2025.4.30
+speechrecognition==3.14.3
 streamlit==1.29.0
 mistralai==0.0.9
-ffmpeg-python==0.2.0
+pydub==0.25.1
+requests==2.32.3
