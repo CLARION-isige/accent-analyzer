@@ -2,24 +2,44 @@ import os
 import io
 import streamlit as st
 import speech_recognition as sr
-from dotenv import load_dotenv
 from mistralai import Mistral 
 import yt_dlp
-import ffmpeg
 import tempfile
+import shutil
+import subprocess
+import platform
+import sys
+import logging
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Get API key from secrets
 mistralai_api_key = st.secrets["MISTRALAI_API_KEY"]
 client = Mistral(api_key=mistralai_api_key)
+
+# Check if running on Streamlit Cloud
+def is_streamlit_cloud():
+    return os.environ.get('STREAMLIT_SHARING', '') == 'true' or os.environ.get('STREAMLIT_CLOUD', '') == 'true'
+
+# Check if ffmpeg is installed
+def is_ffmpeg_installed():
+    ffmpeg_path = shutil.which('ffmpeg')
+    logger.info(f"FFmpeg found at: {ffmpeg_path}")
+    return ffmpeg_path is not None
 
 # Function to stream audio from URL
 def stream_audio(video_url):
     if not video_url or not video_url.strip():
         raise ValueError("Video URL cannot be empty")
 
-    # Create a temporary file for the audio
-    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_audio:
-        temp_audio_path = temp_audio.name
-
+    # Create a temporary directory that's guaranteed to be writable
+    temp_dir = tempfile.mkdtemp()
+    temp_file_base = os.path.join(temp_dir, "audio")
+    temp_audio_path = f"{temp_file_base}.wav"
+    
+    # Configure yt-dlp options with simpler output template
     ydl_opts = {
         'format': 'bestaudio/best',
         'quiet': True,
@@ -29,28 +49,44 @@ def stream_audio(video_url):
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'wav',
         }],
-        'outtmpl': temp_audio_path[:-4]  # Remove .wav as yt-dlp adds it
+        'outtmpl': temp_file_base
     }
+    
+    # Try to find ffmpeg in common locations for cloud environments
+    ffmpeg_paths = [
+        '/usr/bin/ffmpeg',
+        '/usr/local/bin/ffmpeg',
+        '/app/.heroku/python/bin/ffmpeg',
+        '/app/.apt/usr/bin/ffmpeg',
+        shutil.which('ffmpeg')
+    ]
+    
+    for path in ffmpeg_paths:
+        if path and os.path.exists(path):
+            ydl_opts['ffmpeg_location'] = path
+            st.write(f"Using FFmpeg at: {path}")  # Debug info
+            break
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Extract audio info without downloading the video
             info = ydl.extract_info(video_url, download=True)
             
-        if not os.path.exists(temp_audio_path):
-            raise FileNotFoundError("Failed to extract audio stream")
-            
-        return temp_audio_path
+        # Find the created WAV file in the temp directory
+        for file in os.listdir(temp_dir):
+            if file.endswith('.wav'):
+                return os.path.join(temp_dir, file)
+                
+        raise FileNotFoundError("Failed to extract audio stream")
     except yt_dlp.utils.DownloadError as e:
         raise RuntimeError(f"Failed to extract audio: {str(e)}")
     except Exception as e:
         raise RuntimeError(f"An unexpected error occurred while streaming: {str(e)}")
     finally:
+        # We'll clean up the temp directory after transcription is complete
         # Cleanup any partial downloads
         partial_path = f"{temp_audio_path}.part"
         if os.path.exists(partial_path):
             os.remove(partial_path)
-
 
 # Transcribe audio
 def transcribe_audio(audio_path):
@@ -103,8 +139,19 @@ def generate_confidence_and_summary(transcription):
 def main():
     st.title("English Accent Detection Tool")
     st.write("Upload a video URL to analyze the speaker's accent.")
+    
+    # Debug information
+    if st.sidebar.checkbox("Show debug info"):
+        st.sidebar.write("System information:")
+        st.sidebar.write(f"- Platform: {platform.platform()}")
+        st.sidebar.write(f"- Python: {sys.version}")
+        st.sidebar.write(f"- Temp directory: {tempfile.gettempdir()}")
+        st.sidebar.write(f"- FFmpeg installed: {is_ffmpeg_installed()}")
+        st.sidebar.write(f"- Working directory: {os.getcwd()}")
+        st.sidebar.write(f"- Directory writable: {os.access(os.getcwd(), os.W_OK)}")
+        st.sidebar.write(f"- Temp dir writable: {os.access(tempfile.gettempdir(), os.W_OK)}")
 
-    # Check MistalAI API key first
+    # Check MistalAI API key
     if not mistralai_api_key:
         st.error("⚠️ MistralAI API key is not configured. Please set the mistralai_api_key environment variable.")
         return
@@ -142,7 +189,12 @@ def main():
             # Cleanup temporary files
             try:
                 if audio_path and os.path.exists(audio_path):
+                    # Remove the file
                     os.remove(audio_path)
+                    # Also remove the parent directory if it's a temp dir
+                    parent_dir = os.path.dirname(audio_path)
+                    if os.path.exists(parent_dir) and tempfile.gettempdir() in parent_dir:
+                        shutil.rmtree(parent_dir, ignore_errors=True)
             except Exception:
                 pass  # Ignore cleanup errors
 
